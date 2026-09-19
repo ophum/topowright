@@ -25,6 +25,21 @@ go run .
 go run . > iptables-rules.sh
 ```
 
+### PlantUML構成図の生成
+
+`networks` と `services` の定義からPlantUMLを生成するには、`-plantuml`
+オプションを指定します。
+
+```sh
+go run . -plantuml > topology.puml
+```
+
+生成される図では、ネットワークをcloud、サービスをcomponentとして表現します。
+`connects` の矢印には接続先の待ち受け名が入ります。サービスの枠内には
+TCP/UDPのポートまたはICMPのプロトコルに加え、そのサービスを参照している
+serviceGroup名が表示されます。
+`serviceGroups[].hosts` のホスト名とIPアドレスは図には含まれません。
+
 テストは次のコマンドで実行できます。
 
 ```sh

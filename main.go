@@ -2,11 +2,13 @@ package main
 
 import (
 	"context"
+	"flag"
 	"fmt"
 	"log"
 	"os"
 	"os/signal"
 	"slices"
+	"sort"
 	"strings"
 
 	"go.yaml.in/yaml/v3"
@@ -48,9 +50,12 @@ type Host struct {
 }
 
 func main() {
+	plantUML := flag.Bool("plantuml", false, "generate a PlantUML diagram instead of iptables rules")
+	flag.Parse()
+
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer cancel()
-	if err := run(ctx); err != nil {
+	if err := run(ctx, *plantUML); err != nil {
 		log.Fatal(err)
 	}
 }
@@ -98,10 +103,120 @@ func ruleCommandsForHost(rules []FirewallRule, hostIP string) []string {
 	return commands
 }
 
-func run(ctx context.Context) error {
+func plantUMLLabel(value string) string {
+	value = strings.ReplaceAll(value, `\`, `\\`)
+	return strings.ReplaceAll(value, `"`, `\"`)
+}
+
+func generatePlantUML(topo *Topology) string {
+	var diagram strings.Builder
+	diagram.WriteString("@startuml\n")
+	diagram.WriteString("left to right direction\n")
+	diagram.WriteString("skinparam componentStyle rectangle\n\n")
+
+	networkNames := make([]string, 0, len(topo.Networks))
+	for name := range topo.Networks {
+		networkNames = append(networkNames, name)
+	}
+	sort.Strings(networkNames)
+
+	serviceNames := make([]string, 0, len(topo.Services))
+	for name := range topo.Services {
+		serviceNames = append(serviceNames, name)
+	}
+	sort.Strings(serviceNames)
+
+	serviceGroupNames := make([]string, 0, len(topo.ServiceGroups))
+	for name := range topo.ServiceGroups {
+		serviceGroupNames = append(serviceGroupNames, name)
+	}
+	sort.Strings(serviceGroupNames)
+	serviceGroupsByService := make(map[string][]string)
+	for _, groupName := range serviceGroupNames {
+		for _, serviceName := range topo.ServiceGroups[groupName].Services {
+			serviceGroupsByService[serviceName] = append(serviceGroupsByService[serviceName], groupName)
+		}
+	}
+
+	networkIDs := make(map[string]string, len(networkNames))
+	for i, name := range networkNames {
+		id := fmt.Sprintf("network_%d", i)
+		networkIDs[name] = id
+		network := topo.Networks[name]
+		fmt.Fprintf(&diagram, "cloud \"%s\\n%s\" as %s\n", plantUMLLabel(name), plantUMLLabel(network.IP), id)
+	}
+
+	diagram.WriteString("\n")
+	serviceIDs := make(map[string]string, len(serviceNames))
+	for i, name := range serviceNames {
+		id := fmt.Sprintf("service_%d", i)
+		serviceIDs[name] = id
+		label := plantUMLLabel(name)
+		listens := append([]*Listen(nil), topo.Services[name].Listens...)
+		sort.Slice(listens, func(i, j int) bool { return listens[i].Name < listens[j].Name })
+		for _, listen := range listens {
+			protocol := listen.Type
+			if protocol == "" {
+				protocol = "tcp"
+			}
+			if protocol == "icmp" {
+				label += fmt.Sprintf("\\n%s: %s", plantUMLLabel(listen.Name), protocol)
+			} else {
+				label += fmt.Sprintf("\\n%s: %s/%d", plantUMLLabel(listen.Name), protocol, listen.Port)
+			}
+		}
+		groups := serviceGroupsByService[name]
+		sort.Strings(groups)
+		if len(groups) > 0 {
+			label += "\\nserviceGroups: " + plantUMLLabel(strings.Join(groups, ", "))
+		}
+		fmt.Fprintf(&diagram, "component \"%s\" as %s\n", label, id)
+	}
+
+	type edge struct {
+		from, to, label string
+	}
+	edges := []edge{}
+	for _, name := range networkNames {
+		for _, connect := range topo.Networks[name].Conencts {
+			if to, ok := serviceIDs[connect.ServiceName]; ok {
+				edges = append(edges, edge{networkIDs[name], to, connect.PortName})
+			}
+		}
+	}
+	for _, name := range serviceNames {
+		for _, connect := range topo.Services[name].Connects {
+			if to, ok := serviceIDs[connect.ServiceName]; ok {
+				edges = append(edges, edge{serviceIDs[name], to, connect.PortName})
+			}
+		}
+	}
+	sort.Slice(edges, func(i, j int) bool {
+		if edges[i].from != edges[j].from {
+			return edges[i].from < edges[j].from
+		}
+		if edges[i].to != edges[j].to {
+			return edges[i].to < edges[j].to
+		}
+		return edges[i].label < edges[j].label
+	})
+
+	diagram.WriteString("\n")
+	for _, edge := range edges {
+		fmt.Fprintf(&diagram, "%s --> %s : %s\n", edge.from, edge.to, plantUMLLabel(edge.label))
+	}
+	diagram.WriteString("@enduml\n")
+	return diagram.String()
+}
+
+func run(ctx context.Context, plantUML bool) error {
 	topo, err := loadTopo("topology.yml")
 	if err != nil {
 		return err
+	}
+	if plantUML {
+		fmt.Print(generatePlantUML(topo))
+		return nil
 	}
 
 	svcListens := map[string]map[string]*Listen{}
