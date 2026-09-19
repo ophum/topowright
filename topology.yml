@@ -1,0 +1,117 @@
+networks:
+  global:
+    ip: 0.0.0.0/0
+    connects:
+      - serviceName: api
+        portName: http
+      - serviceName: api
+        portName: https
+  bastion:
+    ip: 192.168.0.1
+    connects:
+      - serviceName: icmp
+        portName: icmp
+      - serviceName: ssh
+        portName: ssh
+
+services:
+  icmp:
+    listens:
+      - name: icmp
+        type: icmp
+
+  ssh:
+    listens:
+      - name: ssh
+        port: 22
+
+  api:
+    listens:
+      - name: http
+        port: 80
+      - name: https
+        port: 443
+    connects:
+      - serviceName: db
+        portName: mysql
+      - serviceName: clickhouse-server
+        portName: secure_port
+
+  db:
+    listens:
+      - name: mysql
+        port: 3306
+      - name: interserver_ssh
+        port: 22
+    connects:
+      - serviceName: db
+        portName: interserver_ssh
+
+  clickhouse-server:
+    listens:
+      - name: secure_port
+        port: 9440
+      - name: interserver_https
+        port: 9010
+    connects:
+      - serviceName: clickhouse-keeper
+        portName: secure_port
+      - serviceName: clickhouse-server
+        portName: interserver_https
+
+  clickhouse-keeper:
+    listens:
+      - name: secure_port
+        port: 9281
+      - name: raft
+        port: 9234
+    connects:
+      - serviceName: clickhouse-keeper
+        portName: raft
+
+serviceGroups:
+  api:
+    hosts:
+      api1.example.com:
+        ip: 10.0.0.1
+      api2.example.com:
+        ip: 10.0.0.2
+    services:
+      - icmp
+      - ssh
+      - api
+
+  db:
+    hosts:
+      db1.example.com:
+        ip: 10.0.0.3
+      db2.example.com:
+        ip: 10.0.0.4
+    services:
+      - icmp
+      - ssh
+      - db
+
+  clickhouse-server:
+    hosts:
+      ch1.example.com:
+        ip: 10.0.0.5
+      ch2.example.com:
+        ip: 10.0.0.6
+    services:
+      - icmp
+      - ssh
+      - clickhouse-server
+
+  clickhouse-keeper:
+    hosts:
+      keeper1.example.com:
+        ip: 10.0.0.7
+      keeper2.example.com:
+        ip: 10.0.0.8
+      keeper3.example.com:
+        ip: 10.0.0.9
+    services:
+      - icmp
+      - ssh
+      - clickhouse-keeper
